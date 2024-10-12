@@ -204,4 +204,12 @@ if password == correct_password:
                     try {{
                         document.execCommand('copy');
                         alert('Copied to clipboard!');
-                    }} catch
+                    }} catch (err) {{
+                        alert('Could not copy text: ', err);
+                    }}
+                    document.body.removeChild(textArea);
+                }}
+            }}
+        </script>
+        """  # Properly close the triple quotes here
+        
