@@ -211,5 +211,7 @@ if password == correct_password:
                 }}
             }}
         </script>
-        """  # Properly close the triple quotes here
-        
+        """
+        st.components.v1.html(copy_button)
+else:
+    st.warning("Please enter the correct password to proceed.")
