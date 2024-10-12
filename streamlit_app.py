@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import pandas as pd
 import time
-import random
 import re
 from dotenv import load_dotenv
 
@@ -26,14 +25,29 @@ if not API_KEY:
 # Initialize Groq client
 client = Groq(api_key=API_KEY)
 
-# Function to fetch news articles from Bing News RSS
-def fetch_bing_news(company_name, start_date, end_date, seen_articles=None):
+# Function to fetch the full article content
+def fetch_article_content(article_url):
+    try:
+        response = requests.get(article_url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            # Extract article content from <p> tags
+            article_body = soup.find_all('p')
+            article_text = ' '.join([p.get_text() for p in article_body])
+            return article_text.strip()
+        else:
+            return "Unable to retrieve article content."
+    except Exception as e:
+        return f"Error retrieving content: {e}"
+
+# Function to fetch news articles from Bing News RSS and extract content
+def fetch_bing_news_and_content(company_name, interval, seen_articles=None):
     if seen_articles is None:
         seen_articles = set()
 
     articles = []
     query = f"{company_name}"
-    base_url = f'https://www.bing.com/news/search?q={query}&format=rss'
+    base_url = f'https://www.bing.com/news/search?q={query}&qft=interval%3d%22{interval}%22&form=PTFTNR&format=rss'
 
     response = requests.get(base_url)
     soup = BeautifulSoup(response.content, 'xml')
@@ -47,18 +61,18 @@ def fetch_bing_news(company_name, start_date, end_date, seen_articles=None):
             pub_date_str = item.pubDate.text
             pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %Z').date()
 
-            # Filter articles by start and end date
-            if start_date <= pub_date <= end_date:
-                article_key = (title, link)
-                if article_key not in seen_articles:
-                    articles.append((pub_date, title, link))
-                    seen_articles.add(article_key)
+            article_key = (title, link)
+            if article_key not in seen_articles:
+                # Fetch and store the article content
+                article_content = fetch_article_content(link)
+                articles.append((pub_date, title, link, article_content))
+                seen_articles.add(article_key)
         except Exception as e:
             print(f"Error processing article: {e}")
 
     return articles
 
-# Function to summarize articles
+# Function to summarize articles based on their content
 def summarize_articles(articles):
     max_model_tokens = 8192
     max_output_tokens = 512
@@ -71,7 +85,8 @@ def summarize_articles(articles):
         num_articles = len(batch_articles)
         while num_articles > 0:
             batch = batch_articles[:num_articles]
-            summary_input = "\n".join([f"{title[:80]} (Link: {link})" for _, title, link in batch])
+            summary_input = "\n".join([content for _, _, _, content in batch])  # Use the article content
+
             input_tokens = int(len(summary_input) * estimated_tokens_per_char)
             total_tokens = input_tokens + max_output_tokens
 
@@ -113,24 +128,8 @@ def summarize_articles(articles):
     final_summary = "\n\n".join(summaries)
     return final_summary
 
-# Function to summarize stock news
-def summarize_stock_news(ticker, start_date, end_date):
-    if not start_date:
-        start_date = (datetime.now() - timedelta(days=30)).date()
-    if not end_date:
-        end_date = datetime.now().date()
-
-    try:
-        if isinstance(start_date, str):
-            start_date = datetime.strptime(start_date.strip(), '%Y-%m-%d').date()
-        if isinstance(end_date, str):
-            end_date = datetime.strptime(end_date.strip(), '%Y-%m-%d').date()
-    except ValueError:
-        return "Please enter valid dates in YYYY-MM-DD format."
-
-    if start_date > end_date:
-        return "Start date must be before end date."
-
+# Function to summarize stock news and article content
+def summarize_stock_news_content(ticker, interval):
     try:
         stock = yf.Ticker(ticker)
         company_name = stock.info.get('longName', '')
@@ -139,17 +138,18 @@ def summarize_stock_news(ticker, start_date, end_date):
     except Exception:
         return "Failed to retrieve company information."
 
-    articles = fetch_bing_news(company_name, start_date, end_date)
+    articles = fetch_bing_news_and_content(company_name, interval)
 
     if not articles:
         return "No articles found."
 
+    # Use the summarize_articles function instead of summarize_articles_content
     summary = summarize_articles(articles)
 
     return summary
 
 # Streamlit UI setup
-st.title("Stock News Summarizer")
+st.title("Stock News Summarizer 2.0")
 
 # Correct password stored in .env file for security
 correct_password = os.getenv("APP_PASSWORD")
@@ -161,14 +161,23 @@ password = st.text_input("Enter Password", type="password")
 if password == correct_password:
     st.success("Password correct! You can now use the app.")
     
-    # Input fields for stock ticker, start date, and end date
+    # Input fields for stock ticker
     ticker = st.text_input("Stock Ticker", "NVDA")
-    start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
-    end_date = st.date_input("End Date", datetime.now())
+    
+    # Time options: 24 hours, 7 days, or 30 days
+    time_range = st.selectbox("Select Time Range", ["Past 24 hours", "Past 7 days", "Past 30 days"])
+
+    # Convert user selection to Bing's query format
+    if time_range == "Past 24 hours":
+        interval = "7"
+    elif time_range == "Past 7 days":
+        interval = "8"
+    else:
+        interval = "9"
 
     # Summarize button
     if st.button("Summarize"):
-        summary = summarize_stock_news(ticker, start_date, end_date)
+        summary = summarize_stock_news_content(ticker, interval)
         
         # Display the summary
         st.write(summary)
@@ -195,14 +204,4 @@ if password == correct_password:
                     try {{
                         document.execCommand('copy');
                         alert('Copied to clipboard!');
-                    }} catch (err) {{
-                        alert('Could not copy text: ', err);
-                    }}
-                    document.body.removeChild(textArea);
-                }}
-            }}
-        </script>
-        """
-        st.components.v1.html(copy_button)
-else:
-    st.warning("Please enter the correct password to proceed.")
+                    }} catch
